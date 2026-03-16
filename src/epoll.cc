@@ -13,10 +13,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <exception>
 #include <format>
 #include <stdexcept>
-#include <unordered_map>
 
 #include "epoll.hh"
 #include "headers.hh"
@@ -44,6 +42,26 @@ void epoll_conn::make_progress(slice<char> buf) {
   return parser.make_progress(buf);
 }
 
+/**
+ * Throws: [std::runtime_error] in case socket setup fails
+ */
+epoll_dri::epoll_dri(in_addr_t addr, uint16_t port) {
+  this->addr.sin_family = AF_INET;
+  this->addr.sin_port = htons(port);
+  this->addr.sin_addr.s_addr = addr;
+
+  int err;
+  if ((err = setup_sock()) != 0) {
+    throw std::runtime_error(std::format("setup_sock() -> {}", errno));
+  }
+
+  if ((err = setup_epoll()) != 0) {
+    throw std::runtime_error(std::format("setup_epoll() -> {}", errno));
+  }
+}
+
+epoll_dri::~epoll_dri() = default;
+
 void epoll_dri::handle_accept() {
   sockaddr in_addr;
   socklen_t in_addr_len;
@@ -66,6 +84,21 @@ void epoll_dri::handle_accept() {
 
   in_meta = new epoll_conn(in_fd, in_addr, in_addr_len);
   conns[in_fd] = in_meta;
+
+  char in_ip_str[128];
+  int in_port;
+  sockaddr_to_string(&in_addr, in_ip_str, 128, &in_port);
+
+  logger.info("Incomming connection[{}] from[{}:{}]", in_fd,
+              (const char *)in_ip_str, in_port);
+
+  auto event = epoll_event{
+      .events = EPOLLIN,
+      .data = {.fd = in_fd},
+  };
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, in_fd, &event) < 0) {
+    throw std::runtime_error(std::format("epoll_ctl() -> {}", errno));
+  }
 }
 
 void epoll_dri::handle_read(epoll_conn *c) {
@@ -134,6 +167,8 @@ int epoll_dri::setup_epoll() {
     return 1;
   }
 
+  logger.info("Epoll[{}] setup", epoll_fd);
+
   return 0;
 }
 
@@ -143,24 +178,22 @@ int epoll_dri::setup_sock() {
     return 1;
   }
 
-  if ((sock_fd = socket(AF_INET, SOCK_STREAM, PF_UNSPEC)) < 0) {
+  auto sock_flags = SOCK_STREAM | SOCK_NONBLOCK;
+  if ((sock_fd = socket(addr.sin_family, sock_flags, IPPROTO_IP)) < 0) {
     perror("socket()");
     return 1;
   }
 
-  int flags = fcntl(sock_fd, F_GETFL, 0);
-  fcntl(sock_fd, F_SETFL, flags | O_NONBLOCK);
-
   // assert(sizeof(sockaddr) == sizeof(sockaddr_in));
 
   int opt = 1;
-  auto sock_flags = SO_REUSEADDR | SO_REUSEPORT;
-  if (setsockopt(sock_fd, SOL_SOCKET, sock_flags, &opt, sizeof(int))) {
+  auto so_flags = SO_REUSEADDR | SO_REUSEPORT;
+  if (setsockopt(sock_fd, SOL_SOCKET, so_flags, &opt, sizeof(int))) {
     perror("setsockopt()");
     return 1;
   }
 
-  if (bind(sock_fd, (sockaddr *)&addr, sizeof(sockaddr_in))) {
+  if (bind(sock_fd, (sockaddr *)&addr, sizeof(addr))) {
     perror("bind()");
     return 1;
   }
@@ -170,37 +203,15 @@ int epoll_dri::setup_sock() {
     return 1;
   }
 
+  logger.info("Socket[{}] setup", sock_fd);
+
   return 0;
 }
 
-/**
- * Throws: [std::runtime_error] in case socket setup fails
- */
-epoll_dri::epoll_dri(in_addr_t addr, uint16_t port) {
-  if (addr == 0xFFFFFFFF) {
-    addr = localaddr;
-  }
-
-  this->addr = sockaddr_in{
-      .sin_family = AF_INET,
-      .sin_port = port,
-      .sin_addr = {.s_addr = addr},
-  };
-
-  int err;
-  if ((err = setup_sock()) != 0) {
-    throw std::runtime_error(std::format("setup_sock() -> {}", errno));
-  }
-
-  if ((err = setup_epoll()) != 0) {
-    throw std::runtime_error(std::format("setup_epoll() -> {}", errno));
-  }
-}
-
-epoll_dri::~epoll_dri() = default;
-
 // zero to OK
 int epoll_dri::run() {
+  logger.info("Running on[{}:{}]", addr.sin_addr.s_addr, ntohs(addr.sin_port));
+
   for (;;) {
     epoll_event evts[EPOLL_QUEUE_SIZE];
 
@@ -213,11 +224,10 @@ int epoll_dri::run() {
     for (int i = 0; i < ready_ct; i++) {
       try {
         handle_event(evts[i]);
-      } catch (std::exception e) {
+      } catch (std::runtime_error e) {
         logger.error("Failed to handle epoll_event: {}", e.what());
         terminate(evts[i].data.fd);
       }
-      // TODO: log
     }
   }
 }
@@ -230,11 +240,17 @@ in_port_t epoll_dri::get_port() { return this->addr.sin_port; }
 void epoll_dri::terminate(int fd) {
   epoll_conn *c;
   if ((c = conns[fd]) != NULL) {
+    char in_ip_str[128];
+    int in_port;
+    sockaddr_to_string(&c->addr, in_ip_str, 128, &in_port);
+
+    logger.info("Connection[{}] from[{}:{}] closed", fd, in_ip_str, in_port);
+
     close(fd);
     delete c;
     conns.erase(fd);
   } else {
-    logger.warn("Termination of fd[{}] failed: not found", fd);
+    logger.warn("Termination of connection[{}] failed: not found", fd);
   }
 }
 

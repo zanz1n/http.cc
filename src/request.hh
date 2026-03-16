@@ -29,17 +29,17 @@ struct uri {
 };
 
 struct request {
-  method method;
+  method m;
   uint8_t version_major;
   uint8_t version_minor;
-  uri uri;
+  uri u;
   std::string version;
-  headers headers;
+  headers h;
   buffer body;
 };
 
 struct request_parser {
-private:
+public:
   enum {
     STATE_REQ_LINE,
     STATE_HEADERS,
@@ -50,7 +50,7 @@ private:
   headers_parser headers_p;
   buffer body;
 
-public:
+  // public:
   request_parser();
   ~request_parser();
 

@@ -2,6 +2,7 @@
 #include <stdexcept>
 
 #include "request.hh"
+#include "utils.hh"
 
 namespace http {
 
@@ -78,11 +79,11 @@ uint8_t __parse_semver_unit(const char unit) {
 }
 
 struct h_line_result {
-  method method;
+  method m;
   uint8_t version_major;
   uint8_t version_minor;
   std::string version_str;
-  uri uri;
+  uri u;
 };
 
 h_line_result __request_parse_line(slice<char> line) {
@@ -95,17 +96,17 @@ h_line_result __request_parse_line(slice<char> line) {
       .version_minor = 0,
   };
 
-  res.method = __request_parse_method(split[0]);
-  if (res.method == M_UNKNOWN) {
+  res.m = __request_parse_method(split[0]);
+  if (res.m == M_UNKNOWN) {
     throw std::runtime_error("Invalid request method");
   }
 
   auto uri_s = strnsplit2(split[1], '?');
   if (uri_s.has_value()) {
-    res.uri.path = uri_s->first.to_string();
-    res.uri.query = uri_s->second.to_string();
+    res.u.path = uri_s->first.to_string();
+    res.u.query = uri_s->second.to_string();
   } else {
-    res.uri.path = split[1].to_string();
+    res.u.path = split[1].to_string();
   }
 
   auto hv_s = strnsplit2(split[2], '/');
@@ -138,12 +139,12 @@ request request_parser::build() {
       __request_parse_line(slice<char>(req_line.c_str(), req_line.length()));
 
   return request{
-      .method = line.method,
+      .m = line.m,
       .version_major = line.version_major,
       .version_minor = line.version_minor,
-      .uri = line.uri,
+      .u = line.u,
       .version = line.version_str,
-      .headers = headers_p.build(),
+      .h = headers_p.build(),
       .body = body,
   };
 }

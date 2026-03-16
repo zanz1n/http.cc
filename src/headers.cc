@@ -1,5 +1,5 @@
 #include "headers.hh"
-#include "include/hashmap.h"
+#include "hashmap.h"
 
 #include <cstring>
 #include <new>
@@ -153,7 +153,7 @@ header_process_line(slice<char> line) {
 
 // 1 for error
 h_parser_result_t headers_parser::consume_buffer() {
-  auto line = data.slice();
+  auto line = data.at();
   if (line.empty()) {
     return H_PARSER_END;
   }
